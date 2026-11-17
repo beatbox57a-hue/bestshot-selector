@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#171923">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Best Shot">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<title>Best Shot Selector</title>
+<style>
+:root{color-scheme:dark;--bg:#10131b;--panel:#1b2130;--line:#30394b;--txt:#f4f6fb;--muted:#aab4c5;--accent:#658cff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:env(safe-area-inset-top) 14px calc(24px + env(safe-area-inset-bottom))}
+main{max-width:900px;margin:auto}.head{padding:22px 4px 12px}.head h1{margin:0;font-size:25px}.head p{color:var(--muted);font-size:13px;line-height:1.6}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;margin:12px 0}
+h2{font-size:16px;margin:0 0 10px}.pick,.btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:11px;padding:13px 16px;font-weight:700;font-size:15px;cursor:pointer}
+.pick{background:var(--accent);color:white;width:100%}.pick input{display:none}.btn{background:#2b3447;color:var(--txt);border:1px solid var(--line)}.btn.primary{background:var(--accent);border-color:var(--accent);color:white}.btn:disabled{opacity:.4}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row .btn{flex:1}.muted{color:var(--muted);font-size:13px;line-height:1.5}
+.track{height:8px;background:#30394b;border-radius:20px;overflow:hidden;margin:9px 0}.bar{height:100%;width:0;background:var(--accent);transition:width .15s}
+.summary{display:flex;justify-content:space-between;gap:10px;font-size:13px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.card{min-width:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#151a25}.card img{width:100%;aspect-ratio:4/3;object-fit:contain;background:#080a0f;display:block}.info{padding:9px}.rank{font-size:12px;color:var(--muted)}.score{font-size:22px;font-weight:800;margin:2px 0}.fname{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.empty{padding:18px 4px;color:var(--muted);font-size:13px}.warn{color:#ffd18a;font-size:12px;line-height:1.5}
+@media(min-width:650px){.grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<main>
+<header class="head"><h1>Best Shot Selector</h1><p>写真の輪郭・細部のシャープさを目安に、鮮明な写真を上位表示します。写真は端末内で処理し、外部サーバーへ送信しません。</p></header>
+<section class="panel">
+<h2>① 写真を選択</h2>
+<label class="pick">写真をまとめて選択<input id="files" type="file" accept="image/*" multiple></label>
+<p class="muted" id="selected">選択枚数：0枚</p>
+<p class="warn">※ iPhoneでHEIC写真が読み込めない場合は、写真アプリからJPEGに変換して選択してください。大量選択時は端末の空きメモリにより処理時間が変わります。</p>
+</section>
+<section class="panel">
+<h2>② 解析</h2>
+<div class="summary"><span id="status">写真を選択してください</span><span id="pct">0%</span></div>
+<div class="track"><div class="bar" id="bar"></div></div>
+<p class="muted" id="detail">解析は1枚ずつ実行します。画面を閉じずにお待ちください。</p>
+<div class="row"><button class="btn primary" id="start" disabled>解析開始</button><button class="btn" id="pause" disabled>一時停止</button><button class="btn" id="reset">リセット</button></div>
+</section>
+<section class="panel">
+<div class="summary"><h2>③ 鮮明さランキング</h2><span id="count">0枚</span></div>
+<p class="muted">スコアは画像の細部の変化量から算出する参考値です。顔認識や人物の特定、撮影対象の距離判定は行いません。</p>
+<div class="grid" id="results"></div><div class="empty" id="empty">解析結果はここに表示されます。</div>
+</section>
+<section class="panel">
+<h2>ホーム画面への追加</h2>
+<p class="muted">このアプリをHTTPS対応のWebサーバーに公開した後、iPhoneのSafariで開き、「共有」→「ホーム画面に追加」を選ぶとアプリのように起動できます。</p>
+</section>
+</main>
+<script>
+(()=>{
+const $=id=>document.getElementById(id);
+const input=$('files'),start=$('start'),pause=$('pause'),reset=$('reset');
+let files=[],results=[],cursor=0,running=false,stopRequested=false;
+const MAX_CARDS=60;
+function setProgress(n,total){const p=total?Math.round(n/total*100):0;$('pct').textContent=p+'%';$('bar').style.width=p+'%'}
+function readFile(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(Error('ファイル読み込み失敗'));r.readAsDataURL(file)})}
+function loadImage(src){return new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=()=>reject(Error('画像形式を読み込めません'));im.src=src})}
+function variance(data,w,h){const d=data.data;let sum=0,sum2=0,n=0;for(let y=1;y<h-1;y+=2){for(let x=1;x<w-1;x+=2){const p=(y*w+x)*4;const g=i=>.299*d[i]+.587*d[i+1]+.114*d[i+2];const v=g(p-4)+g(p+4)+g(p-w*4)+g(p+w*4)-4*g(p);sum+=v;sum2+=v*v;n++}}if(!n)return 0;const m=sum/n;return Math.max(0,sum2/n-m*m)}
+async function analyze(file){
+ const src=await readFile(file),im=await loadImage(src);
+ const scale=Math.min(1,640/Math.max(im.naturalWidth,im.naturalHeight));
+ const w=Math.max(2,Math.round(im.naturalWidth*scale)),h=Math.max(2,Math.round(im.naturalHeight*scale));
+ const c=document.createElement('canvas');c.width=w;c.height=h;const ctx=c.getContext('2d',{willReadFrequently:true});if(!ctx)throw Error('画像解析を開始できません');
+ ctx.drawImage(im,0,0,w,h);const raw=variance(ctx.getImageData(0,0,w,h));
+ const score=Math.max(0,Math.min(100,Math.round(100*(1-Math.exp(-raw/700)))));
+ const t=document.createElement('canvas'),tw=Math.min(420,w),th=Math.max(1,Math.round(h*tw/w));t.width=tw;t.height=th;t.getContext('2d').drawImage(im,0,0,tw,th);
+ const preview=t.toDataURL('image/jpeg',.68);c.width=c.height=t.width=t.height=1;
+ return {name:file.name,raw,score,preview,width:im.naturalWidth,height:im.naturalHeight};
+}
+function render(){
+ $('results').replaceChildren();results.sort((a,b)=>b.raw-a.raw);
+ const shown=results.slice(0,MAX_CARDS);
+ $('count').textContent=results.length+'枚解析済み';$('empty').hidden=shown.length>0;
+ shown.forEach((item,i)=>{const card=document.createElement('article');card.className='card';const img=document.createElement('img');img.src=item.preview;img.alt=item.name;
+ const info=document.createElement('div');info.className='info';const rank=document.createElement('div');rank.className='rank';rank.textContent=(i+1)+'位';
+ const score=document.createElement('div');score.className='score';score.textContent=item.score+'/100';
+ const name=document.createElement('div');name.className='fname';name.textContent=item.name;
+ const dims=document.createElement('div');dims.className='fname';dims.textContent=item.width+' × '+item.height+' px';
+ info.append(rank,score,name,dims);card.append(img,info);$('results').append(card)});
+}
+input.addEventListener('change',()=>{if(running)return;files=Array.from(input.files||[]);results=[];cursor=0;render();$('selected').textContent='選択枚数：'+files.length+'枚';$('status').textContent=files.length?'解析準備完了':'写真を選択してください';$('detail').textContent='解析開始を押してください。';start.disabled=!files.length;setProgress(0,files.length)});
+start.addEventListener('click',async()=>{
+ if(running||!files.length)return;running=true;stopRequested=false;start.disabled=true;pause.disabled=false;reset.disabled=true;
+ while(cursor<files.length&&!stopRequested){
+  $('status').textContent='解析中 '+(cursor+1)+' / '+files.length+'枚';$('detail').textContent=files[cursor].name;
+  try{results.push(await analyze(files[cursor]));}catch(e){$('detail').textContent=files[cursor].name+'：'+e.message}
+  cursor++;setProgress(cursor,files.length);render();await new Promise(r=>setTimeout(r,0));
+ }
+ running=false;pause.disabled=true;reset.disabled=false;start.disabled=cursor>=files.length;
+ $('status').textContent=stopRequested?'一時停止しました':'解析完了';
+ $('detail').textContent=stopRequested?'解析開始で続きから再開できます。':'解析済み '+cursor+' / '+files.length+'枚';
+});
+pause.addEventListener('click',()=>{stopRequested=true;$('status').textContent='停止しています…'});
+reset.addEventListener('click',()=>{if(running)return;input.value='';files=[];results=[];cursor=0;render();$('selected').textContent='選択枚数：0枚';$('status').textContent='写真を選択してください';$('detail').textContent='解析は1枚ずつ実行します。';start.disabled=true;setProgress(0,0)});
+if('serviceWorker' in navigator && location.protocol.startsWith('http'))window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+})();
+</script>
+</body>
+</html>
